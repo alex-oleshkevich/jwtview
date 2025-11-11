@@ -20,37 +20,37 @@ jobs:
             os: ubuntu-latest
             target: ""
             use_cross: false
-            artifact: wirepost-linux-x86_64
-            package: wirepost-linux-x86_64.tar.gz
-            binary_path: target/release/wirepost
+            artifact: jwtview-linux-x86_64
+            package: jwtview-linux-x86_64.tar.gz
+            binary_path: target/release/jwtview
           - name: linux-aarch64
             os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             use_cross: true
-            artifact: wirepost-linux-aarch64
-            package: wirepost-linux-aarch64.tar.gz
-            binary_path: target/aarch64-unknown-linux-gnu/release/wirepost
+            artifact: jwtview-linux-aarch64
+            package: jwtview-linux-aarch64.tar.gz
+            binary_path: target/aarch64-unknown-linux-gnu/release/jwtview
           - name: macos-x86_64
             os: macos-14
             target: x86_64-apple-darwin
             use_cross: false
-            artifact: wirepost-macos-x86_64
-            package: wirepost-macos-x86_64.tar.gz
-            binary_path: target/x86_64-apple-darwin/release/wirepost
+            artifact: jwtview-macos-x86_64
+            package: jwtview-macos-x86_64.tar.gz
+            binary_path: target/x86_64-apple-darwin/release/jwtview
           - name: macos-aarch64
             os: macos-14
             target: ""
             use_cross: false
-            artifact: wirepost-macos-aarch64
-            package: wirepost-macos-aarch64.tar.gz
-            binary_path: target/release/wirepost
+            artifact: jwtview-macos-aarch64
+            package: jwtview-macos-aarch64.tar.gz
+            binary_path: target/release/jwtview
           - name: windows-x86_64
             os: windows-latest
             target: ""
             use_cross: false
-            artifact: wirepost-windows-x86_64
-            package: wirepost-windows-x86_64.zip
-            binary_path: target\\release\\wirepost.exe
+            artifact: jwtview-windows-x86_64
+            package: jwtview-windows-x86_64.zip
+            binary_path: target\\release\\jwtview.exe
 
     steps:
       - name: Checkout
@@ -103,7 +103,7 @@ jobs:
           ARTIFACT="${{ matrix.artifact }}"
           PACKAGE="${{ matrix.package }}"
           mkdir -p dist/${ARTIFACT}
-          cp "${{ matrix.binary_path }}" "dist/${ARTIFACT}/wirepost"
+          cp "${{ matrix.binary_path }}" "dist/${ARTIFACT}/jwtview"
           tar -C dist -czf "${PACKAGE}" "${ARTIFACT}"
 
       - name: Package artifact (Windows)
@@ -113,7 +113,7 @@ jobs:
           $artifact = "${{ matrix.artifact }}"
           $package = "${{ matrix.package }}"
           New-Item -ItemType Directory -Path "dist/$artifact" -Force | Out-Null
-          Copy-Item "${{ matrix.binary_path }}" "dist/$artifact/wirepost.exe"
+          Copy-Item "${{ matrix.binary_path }}" "dist/$artifact/jwtview.exe"
           Compress-Archive -Path "dist/$artifact" -DestinationPath $package
 
       - name: Upload artifact
@@ -134,7 +134,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: wirepost-*
+          pattern: jwtview-*
           path: artifacts
           merge-multiple: true
 
