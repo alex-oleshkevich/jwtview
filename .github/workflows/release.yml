@@ -1,0 +1,147 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: ""
+            use_cross: false
+            artifact: wirepost-linux-x86_64
+            package: wirepost-linux-x86_64.tar.gz
+            binary_path: target/release/wirepost
+          - name: linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+            artifact: wirepost-linux-aarch64
+            package: wirepost-linux-aarch64.tar.gz
+            binary_path: target/aarch64-unknown-linux-gnu/release/wirepost
+          - name: macos-x86_64
+            os: macos-14
+            target: x86_64-apple-darwin
+            use_cross: false
+            artifact: wirepost-macos-x86_64
+            package: wirepost-macos-x86_64.tar.gz
+            binary_path: target/x86_64-apple-darwin/release/wirepost
+          - name: macos-aarch64
+            os: macos-14
+            target: ""
+            use_cross: false
+            artifact: wirepost-macos-aarch64
+            package: wirepost-macos-aarch64.tar.gz
+            binary_path: target/release/wirepost
+          - name: windows-x86_64
+            os: windows-latest
+            target: ""
+            use_cross: false
+            artifact: wirepost-windows-x86_64
+            package: wirepost-windows-x86_64.zip
+            binary_path: target\\release\\wirepost.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross
+        if: matrix.use_cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross --tag v0.2.5
+
+      - name: Add Rust target (Unix)
+        if: matrix.target != '' && runner.os != 'Windows'
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Add Rust target (Windows)
+        if: matrix.target != '' && runner.os == 'Windows'
+        shell: pwsh
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.use_cross == true
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (Unix)
+        if: matrix.use_cross == false && runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release --target ${{ matrix.target }}
+          else
+            cargo build --release
+          fi
+
+      - name: Build (Windows)
+        if: matrix.use_cross == false && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ("${{ matrix.target }}" -ne "") {
+            cargo build --release --target ${{ matrix.target }}
+          } else {
+            cargo build --release
+          }
+
+      - name: Package artifact (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ARTIFACT="${{ matrix.artifact }}"
+          PACKAGE="${{ matrix.package }}"
+          mkdir -p dist/${ARTIFACT}
+          cp "${{ matrix.binary_path }}" "dist/${ARTIFACT}/wirepost"
+          tar -C dist -czf "${PACKAGE}" "${ARTIFACT}"
+
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $artifact = "${{ matrix.artifact }}"
+          $package = "${{ matrix.package }}"
+          New-Item -ItemType Directory -Path "dist/$artifact" -Force | Out-Null
+          Copy-Item "${{ matrix.binary_path }}" "dist/$artifact/wirepost.exe"
+          Compress-Archive -Path "dist/$artifact" -DestinationPath $package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: ${{ matrix.package }}
+          if-no-files-found: error
+
+  release:
+    name: Create release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wirepost-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -R artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
