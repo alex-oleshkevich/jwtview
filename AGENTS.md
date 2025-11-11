@@ -10,7 +10,7 @@
   - `colored` for themed terminal output.
   - `chrono` for human-readable timestamp rendering.
   - `reqwest` (blocking, rustls) for JWKS HTTP fetches.
-  - `ring` for RS256 signature verification.
+  - `ring` for JOSE signature verification (RSA/ECDSA/EdDSA).
   - `pem` for parsing PEM public keys.
 
 ## Current Behavior
@@ -20,13 +20,10 @@
 3. Annotates `exp`, `iat`, `nbf` claims with RFC3339 timestamps in dim text.
 4. Shows signature segment (base64url + byte length).
 5. Verification modes:
-   - `--jwks-url`: fetch JWKS, locate matching `kid`, verify RS256 via modulus/exponent.
-   - `--key`: load PEM-encoded RSA public key (SPKI) and verify RS256 locally.
+   - `--jwks-url`: fetch JWKS, locate matching `kid`, verify signatures using the header-selected algorithm (RS*/PS*, ES256/384, EdDSA).
+   - `--key`: load PEM-encoded RSA/ECDSA/Ed25519 public key (SPKI) and verify locally.
    - Both flags are mutually exclusive; when neither is passed, verification is skipped.
-   - Fetches JWKS (JSON Web Key Set) from URL.
-   - Selects key matching `kid`.
-   - Supports RS256 via `ring`’s RSA verify (N/E parameters).
-   - Prints verification status: `verified` (kid + alg), `FAILED <reason>`, or `skipped` if no URL.
+   - Prints verification status: `verified` (kid + alg), `FAILED <reason>`, or `skipped` if no source.
 
 ## Notes for Future Agents
 

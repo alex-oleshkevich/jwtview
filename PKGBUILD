@@ -1,22 +1,16 @@
 pkgname=jwtview
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Colorful CLI to inspect JWTs and optionally verify RS256 signatures"
+pkgdesc="Colorful CLI to inspect JWTs and verify JWT signatures"
 arch=('x86_64')
 url="https://github.com/alex-oleshkevich/jwtview"
 license=('MIT')
 depends=()
-makedepends=('cargo')
-source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+source=("jwtview-linux-x86_64.tar.gz::${url}/releases/download/v${pkgver}/jwtview-linux-x86_64.tar.gz")
 sha256sums=('SKIP')
 
-build() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
-  cargo build --release --locked
-}
-
 package() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
-  install -Dm755 target/release/jwtview "${pkgdir}/usr/bin/jwtview"
-  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  cd "${srcdir}"
+  tar -xzf jwtview-linux-x86_64.tar.gz
+  install -Dm755 jwtview-linux-x86_64/jwtview "${pkgdir}/usr/bin/jwtview"
 }

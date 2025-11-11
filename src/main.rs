@@ -9,7 +9,12 @@ use clap::Parser;
 use colored::*;
 use pem::Pem;
 use reqwest::blocking::Client;
-use ring::signature::{RsaPublicKeyComponents, UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA256};
+use ring::signature::{
+    self, RsaParameters, RsaPublicKeyComponents, UnparsedPublicKey, ECDSA_P256_SHA256_FIXED,
+    ECDSA_P384_SHA384_FIXED, ED25519, RSA_PKCS1_2048_8192_SHA256,
+    RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512, RSA_PSS_2048_8192_SHA256,
+    RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -315,9 +320,128 @@ struct VerificationReport {
     alg: String,
 }
 
+impl SigningAlg {
+    fn from_parts(parts: &TokenParts) -> Result<Self> {
+        let alg = parts
+            .header
+            .get("alg")
+            .and_then(Value::as_str)
+            .context("JWT header missing 'alg'")?;
+        Self::from_str(alg)
+    }
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "RS256" => Ok(Self::Rs256),
+            "RS384" => Ok(Self::Rs384),
+            "RS512" => Ok(Self::Rs512),
+            "PS256" => Ok(Self::Ps256),
+            "PS384" => Ok(Self::Ps384),
+            "PS512" => Ok(Self::Ps512),
+            "ES256" => Ok(Self::Es256),
+            "ES384" => Ok(Self::Es384),
+            "EdDSA" => Ok(Self::EdDsa),
+            other => bail!("unsupported alg '{other}'"),
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rs256 => "RS256",
+            Self::Rs384 => "RS384",
+            Self::Rs512 => "RS512",
+            Self::Ps256 => "PS256",
+            Self::Ps384 => "PS384",
+            Self::Ps512 => "PS512",
+            Self::Es256 => "ES256",
+            Self::Es384 => "ES384",
+            Self::EdDsa => "EdDSA",
+        }
+    }
+
+    fn key_kind(&self) -> KeyKind {
+        match self {
+            Self::Rs256 | Self::Rs384 | Self::Rs512 | Self::Ps256 | Self::Ps384 | Self::Ps512 => {
+                KeyKind::Rsa
+            }
+            Self::Es256 => KeyKind::Ec(EcCurve::P256),
+            Self::Es384 => KeyKind::Ec(EcCurve::P384),
+            Self::EdDsa => KeyKind::Ed25519,
+        }
+    }
+
+    fn ring_algorithm(&self) -> &'static dyn signature::VerificationAlgorithm {
+        match self {
+            Self::Rs256 => &RSA_PKCS1_2048_8192_SHA256,
+            Self::Rs384 => &RSA_PKCS1_2048_8192_SHA384,
+            Self::Rs512 => &RSA_PKCS1_2048_8192_SHA512,
+            Self::Ps256 => &RSA_PSS_2048_8192_SHA256,
+            Self::Ps384 => &RSA_PSS_2048_8192_SHA384,
+            Self::Ps512 => &RSA_PSS_2048_8192_SHA512,
+            Self::Es256 => &ECDSA_P256_SHA256_FIXED,
+            Self::Es384 => &ECDSA_P384_SHA384_FIXED,
+            Self::EdDsa => &ED25519,
+        }
+    }
+
+    fn rsa_params(&self) -> Option<&'static RsaParameters> {
+        match self {
+            Self::Rs256 => Some(&RSA_PKCS1_2048_8192_SHA256),
+            Self::Rs384 => Some(&RSA_PKCS1_2048_8192_SHA384),
+            Self::Rs512 => Some(&RSA_PKCS1_2048_8192_SHA512),
+            Self::Ps256 => Some(&RSA_PSS_2048_8192_SHA256),
+            Self::Ps384 => Some(&RSA_PSS_2048_8192_SHA384),
+            Self::Ps512 => Some(&RSA_PSS_2048_8192_SHA512),
+            Self::Es256 | Self::Es384 | Self::EdDsa => None,
+        }
+    }
+}
+
+impl EcCurve {
+    fn jwk_name(&self) -> &'static str {
+        match self {
+            Self::P256 => "P-256",
+            Self::P384 => "P-384",
+        }
+    }
+
+    fn coordinate_len(&self) -> usize {
+        match self {
+            Self::P256 => 32,
+            Self::P384 => 48,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SigningAlg {
+    Rs256,
+    Rs384,
+    Rs512,
+    Ps256,
+    Ps384,
+    Ps512,
+    Es256,
+    Es384,
+    EdDsa,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum KeyKind {
+    Rsa,
+    Ec(EcCurve),
+    Ed25519,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EcCurve {
+    P256,
+    P384,
+}
+
 fn verify_with_jwks(parts: &TokenParts, url: &str) -> Result<VerificationReport> {
     let kid = header_kid(parts)?;
-    let alg = ensure_rs256(parts)?;
+    let alg = SigningAlg::from_parts(parts)?;
 
     let jwks = fetch_jwks(url)?;
     let jwk = jwks
@@ -326,25 +450,22 @@ fn verify_with_jwks(parts: &TokenParts, url: &str) -> Result<VerificationReport>
         .find(|key| key.kid.as_deref() == Some(kid))
         .with_context(|| format!("no JWKS key with kid '{kid}'"))?;
 
-    verify_with_key(parts, jwk)?;
+    verify_jwk_key(parts, &alg, jwk)?;
 
     Ok(VerificationReport {
         kid: kid.to_string(),
-        alg: jwk
-            .alg
-            .clone()
-            .unwrap_or_else(|| alg.to_string()),
+        alg: alg.as_str().to_string(),
     })
 }
 
 fn verify_with_key_file(parts: &TokenParts, key_path: &str) -> Result<VerificationReport> {
-    let alg = ensure_rs256(parts)?;
+    let alg = SigningAlg::from_parts(parts)?;
     let pem_data = fs::read_to_string(key_path)
         .with_context(|| format!("failed to read key file at {key_path}"))?;
     let pem_block: Pem = pem::parse(pem_data).context("failed to parse PEM key")?;
 
     let verifier =
-        UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, pem_block.contents());
+        UnparsedPublicKey::new(alg.ring_algorithm(), pem_block.contents());
     verifier
         .verify(parts.signing_input.as_bytes(), &parts.signature_bytes)
         .map_err(|_| anyhow!("signature verification failed"))?;
@@ -357,22 +478,52 @@ fn verify_with_key_file(parts: &TokenParts, key_path: &str) -> Result<Verificati
 
     Ok(VerificationReport {
         kid: kid.to_string(),
-        alg: alg.to_string(),
+        alg: alg.as_str().to_string(),
     })
 }
 
-fn verify_with_key(parts: &TokenParts, jwk: &Jwk) -> Result<()> {
-    if jwk.kty != "RSA" {
-        bail!("unsupported JWK kty '{}'", jwk.kty);
+fn verify_jwk_key(parts: &TokenParts, alg: &SigningAlg, jwk: &Jwk) -> Result<()> {
+    if let Some(key_alg) = jwk.alg.as_deref() {
+        if key_alg != alg.as_str() {
+            bail!(
+                "JWK alg '{}' does not match token alg '{}'",
+                key_alg,
+                alg.as_str()
+            );
+        }
     }
 
-    let modulus_b64 = jwk.n.as_deref().context("JWK missing modulus 'n'")?;
-    let exponent_b64 = jwk.e.as_deref().context("JWK missing exponent 'e'")?;
+    match (alg.key_kind(), jwk.kty.as_str()) {
+        (KeyKind::Rsa, "RSA") => verify_rsa_jwk(parts, alg, jwk),
+        (KeyKind::Ec(expected_curve), "EC") => verify_ec_jwk(parts, alg, expected_curve, jwk),
+        (KeyKind::Ed25519, "OKP") => verify_ed_jwk(parts, alg, jwk),
+        (KeyKind::Rsa, other) | (KeyKind::Ec(_), other) | (KeyKind::Ed25519, other) => bail!(
+            "token alg '{}' expects {}, but JWK kty is '{}'",
+            alg.as_str(),
+            expected_key_kind_name(alg),
+            other
+        ),
+    }
+}
 
+fn expected_key_kind_name(alg: &SigningAlg) -> &'static str {
+    match alg.key_kind() {
+        KeyKind::Rsa => "RSA",
+        KeyKind::Ec(curve) => match curve {
+            EcCurve::P256 | EcCurve::P384 => "EC",
+        },
+        KeyKind::Ed25519 => "OKP",
+    }
+}
+
+fn verify_rsa_jwk(parts: &TokenParts, alg: &SigningAlg, jwk: &Jwk) -> Result<()> {
+    let params = alg
+        .rsa_params()
+        .context("internal error: RSA verification invoked for non-RSA algorithm")?;
     let modulus =
-        decode_segment(modulus_b64).context("failed to decode JWK modulus 'n' as base64url")?;
+        decode_required_field(jwk.n.as_deref(), "n").context("failed to decode RSA modulus")?;
     let exponent =
-        decode_segment(exponent_b64).context("failed to decode JWK exponent 'e' as base64url")?;
+        decode_required_field(jwk.e.as_deref(), "e").context("failed to decode RSA exponent")?;
 
     let public_key = RsaPublicKeyComponents {
         n: modulus.as_slice(),
@@ -381,13 +532,103 @@ fn verify_with_key(parts: &TokenParts, jwk: &Jwk) -> Result<()> {
 
     public_key
         .verify(
-            &RSA_PKCS1_2048_8192_SHA256,
+            params,
             parts.signing_input.as_bytes(),
             &parts.signature_bytes,
         )
         .map_err(|_| anyhow!("signature verification failed"))?;
 
     Ok(())
+}
+
+fn verify_ec_jwk(
+    parts: &TokenParts,
+    alg: &SigningAlg,
+    curve: EcCurve,
+    jwk: &Jwk,
+) -> Result<()> {
+    let jwk_curve = jwk
+        .crv
+        .as_deref()
+        .context("EC JWK missing 'crv'")?;
+    if jwk_curve != curve.jwk_name() {
+        bail!(
+            "token alg '{}' expects curve {}, but JWK uses {}",
+            alg.as_str(),
+            curve.jwk_name(),
+            jwk_curve
+        );
+    }
+
+    let x = decode_required_field(jwk.x.as_deref(), "x")
+        .context("failed to decode EC 'x' coordinate")?;
+    let y = decode_required_field(jwk.y.as_deref(), "y")
+        .context("failed to decode EC 'y' coordinate")?;
+
+    let point = build_uncompressed_point(curve, &x, &y)?;
+    let verifier = UnparsedPublicKey::new(alg.ring_algorithm(), point.as_slice());
+    verifier
+        .verify(parts.signing_input.as_bytes(), &parts.signature_bytes)
+        .map_err(|_| anyhow!("signature verification failed"))?;
+
+    Ok(())
+}
+
+fn verify_ed_jwk(parts: &TokenParts, alg: &SigningAlg, jwk: &Jwk) -> Result<()> {
+    let curve = jwk.crv.as_deref().context("OKP JWK missing 'crv'")?;
+    if curve != "Ed25519" {
+        bail!("unsupported OKP curve '{}'", curve);
+    }
+    let x = decode_required_field(jwk.x.as_deref(), "x")
+        .context("failed to decode Ed25519 public key")?;
+    if x.len() != 32 {
+        bail!(
+            "Ed25519 public key must be 32 bytes, found {} bytes",
+            x.len()
+        );
+    }
+
+    let verifier = UnparsedPublicKey::new(alg.ring_algorithm(), x.as_slice());
+    verifier
+        .verify(parts.signing_input.as_bytes(), &parts.signature_bytes)
+        .map_err(|_| anyhow!("signature verification failed"))?;
+
+    Ok(())
+}
+
+fn decode_required_field(value: Option<&str>, name: &str) -> Result<Vec<u8>> {
+    let raw = value
+        .context(format!("JWK missing '{name}' field"))?;
+    decode_segment(raw).with_context(|| format!("failed to decode JWK field '{name}'"))
+}
+
+fn build_uncompressed_point(curve: EcCurve, x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
+    let len = curve.coordinate_len();
+    let x_padded = pad_coordinate(x, len)?;
+    let y_padded = pad_coordinate(y, len)?;
+
+    let mut point = Vec::with_capacity(1 + len * 2);
+    point.push(0x04);
+    point.extend_from_slice(&x_padded);
+    point.extend_from_slice(&y_padded);
+    Ok(point)
+}
+
+fn pad_coordinate(coord: &[u8], len: usize) -> Result<Vec<u8>> {
+    if coord.len() > len {
+        bail!(
+            "coordinate is {} bytes but expected at most {}",
+            coord.len(),
+            len
+        );
+    }
+    if coord.len() == len {
+        return Ok(coord.to_vec());
+    }
+
+    let mut out = vec![0u8; len - coord.len()];
+    out.extend_from_slice(coord);
+    Ok(out)
 }
 
 fn fetch_jwks(url: &str) -> Result<Jwks> {
@@ -416,6 +657,9 @@ struct Jwk {
     alg: Option<String>,
     n: Option<String>,
     e: Option<String>,
+    crv: Option<String>,
+    x: Option<String>,
+    y: Option<String>,
 }
 
 fn header_kid(parts: &TokenParts) -> Result<&str> {
@@ -424,16 +668,4 @@ fn header_kid(parts: &TokenParts) -> Result<&str> {
         .get("kid")
         .and_then(Value::as_str)
         .context("JWT header missing 'kid'")
-}
-
-fn ensure_rs256<'a>(parts: &'a TokenParts) -> Result<&'a str> {
-    let alg = parts
-        .header
-        .get("alg")
-        .and_then(Value::as_str)
-        .context("JWT header missing 'alg'")?;
-    if alg != "RS256" {
-        bail!("unsupported alg '{alg}', only RS256 is currently supported");
-    }
-    Ok(alg)
 }
