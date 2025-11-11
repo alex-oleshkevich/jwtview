@@ -14,10 +14,10 @@
 ## Usage
 
 ```bash
-cargo run -- <token>
-cargo run -- --file token.jwt --jwks-url https://example.com/.well-known/jwks.json
-cargo run -- --key path/to/key.pem <token>
-cargo run -- --file - < token.txt
+jwtview <token>
+jwtview --file token.jwt --jwks-url https://example.com/.well-known/jwks.json
+jwtview --key path/to/key.pem <token>
+jwtview --file - < token.txt
 ```
 
 ### CLI Options
@@ -28,12 +28,6 @@ cargo run -- --file - < token.txt
 | `<token>` | Positional argument for the raw JWT when `--file` is omitted. |
 | `--jwks-url <url>` | Optional JWKS endpoint; if set, RS256 signature verification runs automatically. |
 | `--key <path>` | Optional path to a PEM-encoded RSA/ECDSA/Ed25519 public key (SubjectPublicKeyInfo). Cannot be combined with `--jwks-url`. |
-
-## Building
-
-```bash
-cargo build
-```
 
 ## Disclaimer
 
